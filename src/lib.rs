@@ -314,7 +314,15 @@ impl EguiMq {
     }
 
     /// Call from your [`miniquad::EventHandler`].
-    pub fn key_down_event(&mut self, keycode: mq::KeyCode, keymods: mq::KeyMods) {
+    pub fn key_down_event(&mut self, keycode: mq::KeyCode, mut keymods: mq::KeyMods) {
+        match keycode {
+            miniquad::KeyCode::LeftShift | miniquad::KeyCode::RightShift => {keymods.shift = true}
+            miniquad::KeyCode::LeftControl | miniquad::KeyCode::RightControl => {keymods.ctrl = true}
+            miniquad::KeyCode::LeftAlt | miniquad::KeyCode::RightAlt => {keymods.alt = true}
+            miniquad::KeyCode::LeftSuper | miniquad::KeyCode::RightSuper => {keymods.logo = true}
+            _ => {}
+        }
+
         let modifiers = input::egui_modifiers_from_mq_modifiers(keymods);
         self.egui_input.modifiers = modifiers;
 
@@ -338,7 +346,15 @@ impl EguiMq {
     }
 
     /// Call from your [`miniquad::EventHandler`].
-    pub fn key_up_event(&mut self, keycode: mq::KeyCode, keymods: mq::KeyMods) {
+    pub fn key_up_event(&mut self, keycode: mq::KeyCode, mut keymods: mq::KeyMods) {
+        match keycode {
+            miniquad::KeyCode::LeftShift | miniquad::KeyCode::RightShift => {keymods.shift = false}
+            miniquad::KeyCode::LeftControl | miniquad::KeyCode::RightControl => {keymods.ctrl = false}
+            miniquad::KeyCode::LeftAlt | miniquad::KeyCode::RightAlt => {keymods.alt = false}
+            miniquad::KeyCode::LeftSuper | miniquad::KeyCode::RightSuper => {keymods.logo = false}
+            _ => {}
+        }
+
         let modifiers = input::egui_modifiers_from_mq_modifiers(keymods);
         self.egui_input.modifiers = modifiers;
         if let Some(key) = input::egui_key_from_mq_key(keycode) {
