@@ -99,6 +99,156 @@
 mod input;
 mod painter;
 
+#[cfg(target_arch = "wasm32")]
+mod text_agent {
+    use std::{cell::{Cell, RefCell}, rc::Rc};
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
+    use web_sys::{HtmlInputElement, InputEvent, KeyboardEvent};
+
+    pub struct TextAgent {
+        input: HtmlInputElement,
+        wants_focus: Rc<Cell<bool>>,
+        pub pending_events: Rc<RefCell<Vec<egui::Event>>>,
+        _on_input: Closure<dyn Fn(InputEvent)>,
+        _on_keydown: Closure<dyn Fn(KeyboardEvent)>,
+        _on_blur: Closure<dyn Fn()>,
+    }
+
+    impl TextAgent {
+        pub fn new() -> Result<Self, wasm_bindgen::JsValue> {
+            let document = web_sys::window()
+                .ok_or_else(|| wasm_bindgen::JsValue::from_str("No window"))?
+                .document()
+                .ok_or_else(|| wasm_bindgen::JsValue::from_str("No document"))?;
+
+            let input: HtmlInputElement = document
+                .create_element("input")?
+                .dyn_into()?;
+
+            input.set_type("text");
+            input.set_attribute("autocapitalize", "off")?;
+            input.set_attribute("autocorrect", "off")?;
+            input.set_attribute("autocomplete", "off")?;
+            input.set_attribute("spellcheck", "false")?;
+
+            let style = input.style();
+            style.set_property("position", "absolute")?;
+            style.set_property("opacity", "0")?;
+            style.set_property("width", "1px")?;
+            style.set_property("height", "1px")?;
+            style.set_property("top", "0")?;
+            style.set_property("left", "0")?;
+            style.set_property("pointer-events", "none")?;
+
+            document
+                .body()
+                .ok_or_else(|| wasm_bindgen::JsValue::from_str("No body"))?
+                .append_child(&input)?;
+
+            let wants_focus: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+            let pending = Rc::new(RefCell::new(vec![]));
+
+            // `input` event: captures typed characters and GBoard backspace
+            let input_el = input.clone();
+            let pending_clone = pending.clone();
+            let on_input = Closure::<dyn Fn(InputEvent)>::new(move |e: InputEvent| {
+                // GBoard sends deleteContentBackward instead of keydown Backspace
+                if e.input_type() == "deleteContentBackward" {
+                    input_el.set_value("");
+                    input_el.blur().ok();
+                    input_el.focus().ok();
+                    pending_clone.borrow_mut().push(egui::Event::Key {
+                        key: egui::Key::Backspace,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                    return;
+                }
+                if e.is_composing() {
+                    return;
+                }
+                let text = input_el.value();
+                if !text.is_empty() {
+                    // blur+focus clears GBoard suggestion bar (eframe trick)
+                    input_el.blur().ok();
+                    input_el.set_value("");
+                    input_el.focus().ok();
+                    pending_clone.borrow_mut().push(egui::Event::Text(text));
+                }
+            });
+            input.add_event_listener_with_callback(
+                "input",
+                on_input.as_ref().unchecked_ref(),
+            )?;
+
+            // `keydown` event: navigation keys and backspace (desktop/non-GBoard)
+            let pending_clone = pending.clone();
+            let on_keydown = Closure::<dyn Fn(KeyboardEvent)>::new(move |e: KeyboardEvent| {
+                let egui_key = match e.key().as_str() {
+                    "Enter" => Some(egui::Key::Enter),
+                    "Tab" => Some(egui::Key::Tab),
+                    "Escape" => Some(egui::Key::Escape),
+                    "Backspace" => Some(egui::Key::Backspace),
+                    "ArrowLeft" => Some(egui::Key::ArrowLeft),
+                    "ArrowRight" => Some(egui::Key::ArrowRight),
+                    "ArrowUp" => Some(egui::Key::ArrowUp),
+                    "ArrowDown" => Some(egui::Key::ArrowDown),
+                    _ => None,
+                };
+                if let Some(key) = egui_key {
+                    e.prevent_default();
+                    pending_clone.borrow_mut().push(egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+            });
+            input.add_event_listener_with_callback(
+                "keydown",
+                on_keydown.as_ref().unchecked_ref(),
+            )?;
+
+            // `blur` listener: if we still want focus (canvas stole it back),
+            // immediately re-focus to keep the virtual keyboard open
+            let wants_focus_clone = wants_focus.clone();
+            let input_el = input.clone();
+            let on_blur = Closure::<dyn Fn()>::new(move || {
+                if wants_focus_clone.get() {
+                    input_el.focus().ok();
+                }
+            });
+            input.add_event_listener_with_callback(
+                "blur",
+                on_blur.as_ref().unchecked_ref(),
+            )?;
+
+            Ok(Self {
+                input,
+                wants_focus,
+                pending_events: pending,
+                _on_input: on_input,
+                _on_keydown: on_keydown,
+                _on_blur: on_blur,
+            })
+        }
+
+        pub fn set_focus(&self, focus: bool) {
+            self.wants_focus.set(focus);
+            if focus {
+                self.input.focus().ok();
+            } else {
+                self.input.blur().ok();
+            }
+        }
+    }
+}
+
 // ----------------------------------------------------------------------------
 
 /// Required by `getrandom` crate.
@@ -138,6 +288,10 @@ pub struct EguiMq {
     clipboard: Option<copypasta::ClipboardContext>,
     shapes: Option<Vec<egui::epaint::ClippedShape>>,
     textures_delta: egui::TexturesDelta,
+    #[cfg(target_arch = "wasm32")]
+    text_agent: Option<text_agent::TextAgent>,
+    #[cfg(target_arch = "wasm32")]
+    text_agent_blur_frames: u8,
 }
 
 impl EguiMq {
@@ -154,6 +308,10 @@ impl EguiMq {
             clipboard: init_clipboard(),
             shapes: None,
             textures_delta: Default::default(),
+            #[cfg(target_arch = "wasm32")]
+            text_agent: text_agent::TextAgent::new().ok(),
+            #[cfg(target_arch = "wasm32")]
+            text_agent_blur_frames: 0,
         }
     }
 
@@ -182,6 +340,14 @@ impl EguiMq {
                 .native_pixels_per_point = Some(self.native_dpi_scale);
         }
 
+        // Drain events from the hidden text input (WASM/Android virtual keyboard)
+        #[cfg(target_arch = "wasm32")]
+        if let Some(ref agent) = self.text_agent {
+            self.egui_input
+                .events
+                .append(&mut agent.pending_events.borrow_mut());
+        }
+
         let full_output = self
             .egui_ctx
             .run(self.egui_input.take(), |egui_ctx| run_ui(mq_ctx, egui_ctx));
@@ -205,10 +371,25 @@ impl EguiMq {
             commands,
             cursor_icon,
             events: _,                    // no screen reader
-            ime: _,                       // no IME
-            mutable_text_under_cursor: _, // no IME
+            ime,
+            mutable_text_under_cursor: _, // use ime instead
             ..
         } = platform_output;
+
+        #[cfg(target_arch = "wasm32")]
+        if let Some(ref agent) = self.text_agent {
+            if ime.is_some() {
+                self.text_agent_blur_frames = 0;
+                agent.set_focus(true);
+            } else {
+                self.text_agent_blur_frames = self.text_agent_blur_frames.saturating_add(1);
+                if self.text_agent_blur_frames >= 5 {
+                    agent.set_focus(false);
+                }
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = ime;
 
         for command in commands {
             match command {
