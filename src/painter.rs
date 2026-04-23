@@ -121,9 +121,14 @@ impl Painter {
             }
         } else {
             // New texture (or full update).
+            let wrap = match delta.options.wrap_mode {
+                egui::TextureWrapMode::ClampToEdge => miniquad::TextureWrap::Clamp,
+                egui::TextureWrapMode::Repeat => miniquad::TextureWrap::Repeat,
+                egui::TextureWrapMode::MirroredRepeat => miniquad::TextureWrap::Mirror,
+            };
             let params = miniquad::TextureParams {
                 format: miniquad::TextureFormat::RGBA8,
-                wrap: miniquad::TextureWrap::Clamp,
+                wrap,
                 min_filter: filter,
                 mag_filter: filter,
                 width: w as _,
