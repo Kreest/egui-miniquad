@@ -326,7 +326,7 @@ impl EguiMq {
     pub fn run(
         &mut self,
         mq_ctx: &mut dyn mq::RenderingBackend,
-        mut run_ui: impl FnMut(&mut dyn mq::RenderingBackend, &egui::Context),
+        mut run_ui: impl FnMut(&mut dyn mq::RenderingBackend, &mut egui::Ui),
     ) {
         input::on_frame_start(&mut self.egui_input, &self.egui_ctx);
 
@@ -350,7 +350,7 @@ impl EguiMq {
 
         let full_output = self
             .egui_ctx
-            .run(self.egui_input.take(), |egui_ctx| run_ui(mq_ctx, egui_ctx));
+            .run_ui(self.egui_input.take(), |ui| run_ui(mq_ctx, ui));
 
         let egui::FullOutput {
             platform_output,
