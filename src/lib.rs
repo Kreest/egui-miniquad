@@ -448,6 +448,7 @@ impl EguiMq {
             modifiers,
             unit: egui::MouseWheelUnit::Line,
             delta,
+            phase: egui::TouchPhase::Move,
         });
     }
 
