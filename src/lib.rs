@@ -378,7 +378,7 @@ impl EguiMq {
 
         #[cfg(target_arch = "wasm32")]
         if let Some(ref agent) = self.text_agent {
-            if self.egui_ctx.text_edit_focused() {
+            if ime.is_some() {
                 self.text_agent_blur_frames = 0;
                 agent.set_focus(true);
             } else {
@@ -388,6 +388,7 @@ impl EguiMq {
                 }
             }
         }
+        #[cfg(not(target_arch = "wasm32"))]
         let _ = ime;
 
         for command in commands {
